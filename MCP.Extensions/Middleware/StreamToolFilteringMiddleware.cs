@@ -1,0 +1,399 @@
+using System.Text;
+using MCP.Extensions.Services;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging; 
+
+namespace MCP.Extensions.Middleware;
+
+/// <summary>
+/// Middleware that filters the list of tools in the response stream based on the agent mode and tool audience.
+/// Removes tools from the JSON response that are not allowed for the current agent mode.
+/// </summary>
+public class StreamingToolFilteringMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly IToolAudienceService _toolAudienceService;
+    private readonly ILogger<FilteringWriteStream> _loggerFilteringStream;
+
+    public StreamingToolFilteringMiddleware(
+        RequestDelegate next,
+        IToolAudienceService toolAudienceService,
+        ILogger<FilteringWriteStream> loggerFilteringStream // Injected logger
+    )
+    {
+        _next = next;
+        _toolAudienceService = toolAudienceService;
+        _loggerFilteringStream = loggerFilteringStream;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var originalBody = context.Response.Body;
+
+        context.Request.Headers.TryGetValue("X-AGENT-MODE", out var agentModeHeaderValue);
+        string? agentMode = agentModeHeaderValue.FirstOrDefault()?.ToUpperInvariant();
+
+        Func<string, bool> shouldRemoveToolDelegate = (toolName) =>
+        {
+            _loggerFilteringStream.LogDebug($"Evaluating tool '{toolName}' for removal...");
+
+            if (string.IsNullOrEmpty(toolName))
+            {
+                _loggerFilteringStream.LogDebug("Tool name is empty, keeping tool");
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(agentMode))
+            {
+                _loggerFilteringStream.LogInformation(
+                    $"No X-AGENT-MODE header. Tool '{toolName}' will be removed for security."
+                );
+                return true;
+            }
+
+            string[] actualAllowedAudiences = _toolAudienceService.GetAudiencesForTool(toolName);
+            _loggerFilteringStream.LogDebug(
+                $"Tool '{toolName}' has audiences: [{string.Join(", ", actualAllowedAudiences)}], Agent mode: '{agentMode}'"
+            );
+
+            if (actualAllowedAudiences.Any())
+            {
+                if (!actualAllowedAudiences.Contains(agentMode))
+                {
+                    _loggerFilteringStream.LogInformation(
+                        $"Tool '{toolName}' will be removed. Agent mode '{agentMode}' is not in allowed audiences [{string.Join(", ", actualAllowedAudiences)}]."
+                    );
+                    return true;
+                }
+            }
+            _loggerFilteringStream.LogDebug(
+                $"Tool '{toolName}' will be kept. Agent mode '{agentMode}' is allowed or no audience restrictions for this tool."
+            );
+            return false;
+        };
+
+        using var filteringStream = new FilteringWriteStream(
+            originalBody,
+            context.Response.ContentType,
+            _loggerFilteringStream,
+            shouldRemoveToolDelegate
+        );
+        context.Response.Body = filteringStream;
+
+        try
+        {
+            await _next(context);
+        }
+        finally
+        {
+            // Ensure our stream flushes its internal buffer and writes any remaining data
+            await filteringStream.FlushAsync(context.RequestAborted);
+            context.Response.Body = originalBody; // Restore original body stream
+        }
+    }
+}
+
+public static class ToolFilteringMiddlewareExtensions
+{
+    public static IApplicationBuilder UseToolFiltering(this IApplicationBuilder builder)
+    {
+        return builder.UseMiddleware<StreamingToolFilteringMiddleware>();
+    }
+}
+
+public class FilteringWriteStream : Stream
+{
+    private readonly Stream _inner;
+    private readonly string? _contentType;
+    private readonly ILogger<FilteringWriteStream> _logger;
+    private readonly Func<string, bool> _shouldRemoveTool; // Delegate to decide on tool removal
+
+    private readonly StringBuilder _dataBuffer = new StringBuilder();
+    private bool _inToolsArray = false;
+    private bool _firstToolWrittenInArray = false;
+
+    public FilteringWriteStream(
+        Stream inner,
+        string? contentType,
+        ILogger<FilteringWriteStream> logger,
+        Func<string, bool> shouldRemoveTool
+    )
+    {
+        _inner = inner;
+        _contentType = contentType;
+        _logger = logger;
+        _shouldRemoveTool = shouldRemoveTool;
+    }
+
+    public override bool CanRead => _inner.CanRead;
+    public override bool CanSeek => false; // Cannot seek in a forward-only filter stream
+    public override bool CanWrite => _inner.CanWrite;
+    public override long Length => throw new NotSupportedException();
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override void Flush() => _inner.Flush(); // Basic flush
+
+    public override async Task FlushAsync(CancellationToken cancellationToken)
+    {
+        // Process any remaining buffered data before flushing the inner stream
+        await ProcessBufferedDataAsync(cancellationToken, true); // Pass true for isFlushing
+        if (_dataBuffer.Length > 0)
+        {
+            // If still data left after processing (e.g. incomplete JSON at end of stream)
+            _logger.LogWarning(
+                $"Flushing stream with unprocessed data in buffer (possibly incomplete at end of stream): {_dataBuffer.ToString(0, Math.Min(_dataBuffer.Length, 200))}"
+            );
+            await WriteStringToInnerAsync(_dataBuffer.ToString(), cancellationToken);
+            _dataBuffer.Clear();
+        }
+        await _inner.FlushAsync(cancellationToken);
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        WriteAsync(buffer, offset, count).GetAwaiter().GetResult();
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        string chunk = Encoding.UTF8.GetString(buffer, offset, count);
+        _dataBuffer.Append(chunk);
+        await ProcessBufferedDataAsync(cancellationToken, false);
+    }
+
+    private async Task ProcessBufferedDataAsync(CancellationToken cancellationToken, bool isFlushing)
+    {
+        _logger.LogTrace(
+            $"ProcessBufferedDataAsync called. Buffer length: {_dataBuffer.Length}, isFlushing: {isFlushing}, inToolsArray: {_inToolsArray}"
+        );
+        int processedOffset = 0; // Tracks how much of _dataBuffer we've processed and can discard
+
+        while (true)
+        {
+            if (processedOffset >= _dataBuffer.Length)
+                break; // Nothing left to process from current buffer snapshot
+
+            string currentContent = _dataBuffer.ToString(processedOffset, _dataBuffer.Length - processedOffset);
+
+            if (!_inToolsArray)
+            {
+                int toolsArrayStartIndex = currentContent.IndexOf("\"tools\":[");
+                _logger.LogTrace(
+                    $"Looking for tools array start in content: {currentContent.Substring(0, Math.Min(currentContent.Length, 200))}..."
+                );
+                if (toolsArrayStartIndex != -1)
+                {
+                    int consumeUntil = toolsArrayStartIndex + "\"tools\":[".Length;
+                    string prefix = currentContent.Substring(0, consumeUntil);
+                    _logger.LogDebug($"Found tools array at index {toolsArrayStartIndex}, writing prefix: {prefix}");
+                    await WriteStringToInnerAsync(prefix, cancellationToken);
+                    processedOffset += consumeUntil;
+                    _inToolsArray = true;
+                    _firstToolWrittenInArray = false;
+                    _logger.LogInformation("Entered tools array - filtering mode activated.");
+                    continue; // Re-evaluate from the new state
+                }
+
+                // Not in tools array, and "tools":[" not found.
+                // If flushing, pass everything. Otherwise, pass only up to the last newline to avoid breaking mid-event.
+                int passUntil = currentContent.Length;
+                if (!isFlushing)
+                {
+                    int lastNewline = currentContent.LastIndexOf('\n');
+                    if (lastNewline != -1)
+                        passUntil = lastNewline + 1;
+                    else
+                        break; // Wait for more data if not flushing and no newline
+                }
+
+                if (passUntil > 0)
+                {
+                    string passThru = currentContent.Substring(0, passUntil);
+                    await WriteStringToInnerAsync(passThru, cancellationToken);
+                    processedOffset += passThru.Length;
+                }
+                if (!isFlushing && passUntil < currentContent.Length)
+                    break; // Remainder is partial, wait if not flushing
+                if (isFlushing && passUntil == currentContent.Length)
+                    break; // Flushed all, exit
+                continue;
+            }
+
+            if (_inToolsArray)
+            {
+                // Re-slice currentContent based on new processedOffset
+                currentContent = _dataBuffer.ToString(processedOffset, _dataBuffer.Length - processedOffset);
+                _logger.LogTrace(
+                    $"In tools array, processing content: {currentContent.Substring(0, Math.Min(currentContent.Length, 200))}..."
+                );
+
+                int toolStartMarkerIndex = currentContent.IndexOf("{\"name\":\"");
+                int arrayEndMarkerIndex = currentContent.IndexOf("]},");
+
+                _logger.LogTrace(
+                    $"Tool start marker index: {toolStartMarkerIndex}, Array end marker index: {arrayEndMarkerIndex}"
+                );
+
+                if (
+                    toolStartMarkerIndex != -1
+                    && (arrayEndMarkerIndex == -1 || toolStartMarkerIndex < arrayEndMarkerIndex)
+                )
+                {
+                    _logger.LogDebug($"Found tool start at index {toolStartMarkerIndex}, parsing tool JSON...");
+                    int toolJsonStartIndex = toolStartMarkerIndex; // The '{' of the tool
+                    int openBraceCount = 0;
+                    int toolJsonEndIndex = -1;
+
+                    for (int i = toolJsonStartIndex; i < currentContent.Length; i++)
+                    {
+                        if (currentContent[i] == '{')
+                            openBraceCount++;
+                        else if (currentContent[i] == '}')
+                            openBraceCount--;
+
+                        if (openBraceCount == 0 && i >= toolJsonStartIndex)
+                        {
+                            toolJsonEndIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (toolJsonEndIndex != -1) // Full tool JSON object found in currentContent
+                    {
+                        string toolJson = currentContent.Substring(
+                            toolJsonStartIndex,
+                            toolJsonEndIndex - toolJsonStartIndex + 1
+                        );
+                        _logger.LogDebug(
+                            $"Extracted complete tool JSON: {toolJson.Substring(0, Math.Min(toolJson.Length, 150))}..."
+                        );
+
+                        string toolName = string.Empty;
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(toolJson);
+                            if (doc.RootElement.TryGetProperty("name", out var nameEl))
+                            {
+                                toolName = nameEl.GetString() ?? "";
+                                _logger.LogDebug($"Parsed tool name: '{toolName}'");
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Tool JSON does not contain 'name' property");
+                            }
+                        }
+                        catch (System.Text.Json.JsonException ex)
+                        {
+                            _logger.LogWarning(
+                                ex,
+                                $"Failed to parse tool JSON: {toolJson.Substring(0, Math.Min(toolJson.Length, 100))}"
+                            );
+                            // Default to keeping malformed tool JSON to avoid data loss, or decide on other error strategy
+                        }
+
+                        bool removeTool = !string.IsNullOrEmpty(toolName) && _shouldRemoveTool(toolName);
+                        _logger.LogDebug($"Tool '{toolName}' removal decision: {removeTool}");
+
+                        if (!removeTool)
+                        {
+                            StringBuilder toolToWrite = new StringBuilder();
+                            if (_firstToolWrittenInArray)
+                            {
+                                toolToWrite.Append(",");
+                            }
+                            toolToWrite.Append(toolJson);
+                            await WriteStringToInnerAsync(toolToWrite.ToString(), cancellationToken);
+                            _firstToolWrittenInArray = true;
+                            _logger.LogDebug($"Kept tool: {toolName}");
+                        }
+                        else
+                        {
+                            _logger.LogInformation($"Removed tool: {toolName}");
+                        }
+
+                        processedOffset += (toolJsonEndIndex - toolJsonStartIndex + 1); // Advance past the tool JSON
+
+                        // Consume the following comma if present (and any whitespace before it)
+                        if (_dataBuffer.Length > processedOffset)
+                        {
+                            string remainingAfterTool = _dataBuffer.ToString(
+                                processedOffset,
+                                _dataBuffer.Length - processedOffset
+                            );
+                            int k = 0;
+                            while (k < remainingAfterTool.Length && char.IsWhiteSpace(remainingAfterTool[k]))
+                                k++; // Skip whitespace
+                            if (k < remainingAfterTool.Length && remainingAfterTool[k] == ',')
+                            {
+                                processedOffset += (k + 1); // Consume whitespace and comma
+                                _logger.LogTrace("Consumed trailing comma after tool");
+                            }
+                        }
+                        continue; // Re-evaluate from the new state
+                    }
+                    else
+                    {
+                        _logger.LogTrace("Tool JSON incomplete, waiting for more data");
+                        if (!isFlushing)
+                            break;
+                    } // Tool JSON incomplete, wait for more data if not flushing
+                }
+                else if (arrayEndMarkerIndex != -1) // Found end of array "]}"
+                {
+                    _logger.LogDebug($"Found end of tools array at index {arrayEndMarkerIndex}");
+                    int consumeUntil = arrayEndMarkerIndex + "]}".Length;
+                    string suffix = currentContent.Substring(0, consumeUntil);
+                    await WriteStringToInnerAsync(suffix, cancellationToken);
+                    processedOffset += consumeUntil;
+                    _inToolsArray = false;
+                    _logger.LogInformation("Exited tools array - filtering mode deactivated.");
+                    continue; // Re-evaluate from the new state
+                }
+                else
+                {
+                    _logger.LogTrace("No tool start or array end found, waiting for more data");
+                    if (!isFlushing)
+                        break; // No tool start or array end, wait for more data if not flushing
+                }
+            }
+            // If we are here and isFlushing, it means we couldn't process the rest.
+            // The FlushAsync method will handle remaining _dataBuffer content.
+            if (isFlushing && processedOffset < _dataBuffer.Length)
+            {
+                string remainingPassThru = _dataBuffer.ToString(processedOffset, _dataBuffer.Length - processedOffset);
+                _logger.LogDebug(
+                    $"Flushing remaining unprocessed content: {remainingPassThru.Substring(0, Math.Min(remainingPassThru.Length, 100))}"
+                );
+                await WriteStringToInnerAsync(remainingPassThru, cancellationToken);
+                processedOffset += remainingPassThru.Length;
+            }
+            break; // Break from while if no progress or waiting for data (and not flushing everything)
+        } // End while
+
+        if (processedOffset > 0)
+        {
+            _dataBuffer.Remove(0, processedOffset);
+            _logger.LogTrace($"Processed and removed {processedOffset} chars. Remaining buffer: {_dataBuffer.Length}");
+        }
+    }
+
+    private async Task WriteStringToInnerAsync(string value, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            await _inner.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
+        }
+    }
+}

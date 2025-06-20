@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- NuGet package properties -->
+    <PackageId>MCP.Extensions</PackageId>
+    <Version>0.0.1</Version>
+    <Authors>Eric Chapman</Authors>
+    
+    <Product>MCP.Extensions</Product>
+    <Description>Extensions and middleware for ModelContextProtocol in ASP.NET Core.</Description>
+    <Copyright>Copyright © 2025 Eric Chapman</Copyright>
+    <PackageTags>aspnetcore;middleware;extensions;modelcontextprotocol</PackageTags>
+    <RepositoryUrl>https://github.com/echapmanFromBunnings/mcp.extensions</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/echapmanFromBunnings/mcp.extensions</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <RepositoryType>git</RepositoryType>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Middleware\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="0.2.0-preview.3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.2.0-preview.3" />
+  </ItemGroup>
+
+</Project>
