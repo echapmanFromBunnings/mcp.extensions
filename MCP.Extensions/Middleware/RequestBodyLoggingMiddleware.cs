@@ -11,17 +11,8 @@ namespace MCP.Extensions.Middleware;
 /// This will make the stream seekable and read the body content,
 /// doing this will create a blocking stream, so only really use this for debugging purposes.
 /// </summary>
-public class RequestBodyLoggingMiddleware
+public class RequestBodyLoggingMiddleware(RequestDelegate next, ILogger<RequestBodyLoggingMiddleware> logger)
 {
-    private readonly RequestDelegate _next;
-    private readonly ILogger<RequestBodyLoggingMiddleware> _logger;
-
-    public RequestBodyLoggingMiddleware(RequestDelegate next, ILogger<RequestBodyLoggingMiddleware> logger)
-    {
-        _next = next;
-        _logger = logger;
-    }
-
     public async Task InvokeAsync(HttpContext context)
     {
         context.Request.EnableBuffering();
@@ -32,16 +23,16 @@ public class RequestBodyLoggingMiddleware
             {
                 var requestBodyAsString = await reader.ReadToEndAsync(context.RequestAborted);
                 var sanitizedRequestBody = SanitizeRequestBody(requestBodyAsString);
-                _logger.LogDebug($"Request Body: {sanitizedRequestBody}");
+                logger.LogDebug($"Request Body: {sanitizedRequestBody}");
                 context.Request.Body.Position = 0;
             }
         }
         else
         {
-            _logger.LogDebug("Request body is empty or content length is not specified.");
+            logger.LogDebug("Request body is empty or content length is not specified.");
         }
 
-        await _next(context);
+        await next(context);
     }
 
     private string SanitizeRequestBody(string requestBodyAsString)

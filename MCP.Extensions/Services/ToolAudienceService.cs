@@ -13,24 +13,30 @@ public class ToolAudienceService : IToolAudienceService
 {
     private readonly Dictionary<string, string[]> _toolAudiences = new();
     private readonly ILogger<ToolAudienceService> _logger;
+    private readonly List<Assembly> _assemblies = new();
 
     public ToolAudienceService(ILogger<ToolAudienceService> logger)
     {
         _logger = logger;
-        Initialize();
+        // Register the executing assembly by default
+        RegisterAssembly(Assembly.GetExecutingAssembly());
     }
 
-    private void Initialize()
+    public void RegisterAssembly(Assembly assembly)
     {
-        _logger.LogInformation("Scanning assembly for McpAudience and McpServerTool attributes...");
-        // Assuming tools are in the currently executing assembly.
-        // If tools can be in other assemblies, this might need adjustment.
-        var assembly = Assembly.GetExecutingAssembly();
+        if (!_assemblies.Contains(assembly))
+        {
+            _assemblies.Add(assembly);
+            ScanAssembly(assembly);
+        }
+    }
+
+    private void ScanAssembly(Assembly assembly)
+    {
+        _logger.LogInformation("Scanning assembly {Name} for McpAudience and McpServerTool attributes...", assembly.GetName().Name);
 
         foreach (var type in assembly.GetTypes())
         {
-            // Considering static methods as per current tool implementations.
-            // Add BindingFlags.Instance if tools can also be instance methods.
             foreach (
                 var method in type.GetMethods(
                     BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Instance
@@ -45,31 +51,26 @@ public class ToolAudienceService : IToolAudienceService
                     if (string.IsNullOrEmpty(mcpServerToolAttribute.Name))
                     {
                         _logger.LogWarning(
-                            $"Method {type.FullName}.{method.Name} has McpServerToolAttribute but Name is null or empty. Skipping."
+                            "Method {TypeFullName}.{MethodName} has McpServerToolAttribute but Name is null or empty. Skipping.", type.FullName, method.Name
                         );
                         continue;
                     }
 
                     if (_toolAudiences.ContainsKey(mcpServerToolAttribute.Name))
                     {
-                        // This could happen if different methods (e.g. overloads, or in different classes if names are not unique globally)
-                        // are decorated with the same McpServerToolAttribute.Name.
-                        // Depending on desired behavior, this could be an error, or merge audiences, or overwrite.
-                        // Current implementation overwrites.
                         _logger.LogWarning(
-                            $"Duplicate tool name '{mcpServerToolAttribute.Name}' found for method {type.FullName}.{method.Name}. Overwriting previous audience entry."
+                            "Duplicate tool name '{Name}' found for method {TypeFullName}.{MethodName}. Overwriting previous audience entry.", mcpServerToolAttribute.Name, type.FullName, method.Name
                         );
+                        continue;
                     }
                     _toolAudiences[mcpServerToolAttribute.Name] = mcpAudienceAttribute.Audiences;
                     _logger.LogDebug(
-                        $"Registered tool '{mcpServerToolAttribute.Name}' with audiences: [{string.Join(", ", mcpAudienceAttribute.Audiences ?? Array.Empty<string>())}] for method {type.FullName}.{method.Name}"
+                        "Registered tool '{Name}' with audiences: [{Join}] for method {TypeFullName}.{MethodName}", mcpServerToolAttribute.Name, string.Join(", ", mcpAudienceAttribute.Audiences ?? Array.Empty<string>()), type.FullName, method.Name
                     );
                 }
             }
         }
-        _logger.LogInformation($"Finished scanning. Found {_toolAudiences.Count} tools with audience information.");
     }
-
     public IReadOnlyDictionary<string, string[]> GetToolAudiences()
     {
         return _toolAudiences;
@@ -83,9 +84,21 @@ public class ToolAudienceService : IToolAudienceService
 
 public static class ToolAudienceRegistrationExtensions
 {
-    public static IServiceCollection AddToolAudienceService(this IServiceCollection services)
+    /// <summary>
+    /// Registers the ToolAudienceService as a singleton and scans the provided assemblies
+    /// for tool and audience attributes, enabling runtime discovery of tool audiences.
+    /// </summary>
+    /// <param name="services">service collection</param>
+    /// <param name="assemblies">assemblies to scan</param>
+    /// <returns>service collection</returns>
+    public static IServiceCollection AddToolAudienceService(this IServiceCollection services, List<Assembly> assemblies)
     {
         services.AddSingleton<IToolAudienceService, ToolAudienceService>();
+        var toolAudienceService = services.BuildServiceProvider().GetRequiredService<IToolAudienceService>();
+        foreach (var assembly in assemblies)
+        {
+            toolAudienceService.RegisterAssembly(assembly);
+        }
         return services;
     }
 }

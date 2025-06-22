@@ -11,34 +11,22 @@ namespace MCP.Extensions.Middleware;
 /// Web middleware to filter out tools that do not match the header record being passed in.
 /// This is done in a blocking matter, so any stream calls will not be sent in a streaming manner.
 /// </summary>
-public class ResponseToolFilteringMiddleware
+public class ResponseToolFilteringMiddleware(
+    RequestDelegate next,
+    ILogger<ResponseToolFilteringMiddleware> logger,
+    IToolAudienceService toolAudienceService)
 {
-    private readonly RequestDelegate _next;
-    private readonly ILogger<ResponseToolFilteringMiddleware> _logger;
-    private readonly IToolAudienceService _toolAudienceService; 
-
-    public ResponseToolFilteringMiddleware(
-        RequestDelegate next,
-        ILogger<ResponseToolFilteringMiddleware> logger,
-        IToolAudienceService toolAudienceService 
-    )
-    {
-        _next = next;
-        _logger = logger;
-        _toolAudienceService = toolAudienceService; 
-    }
-
     public async Task InvokeAsync(HttpContext context)
     {
         var originalResponseBodyStream = context.Response.Body;
         using (var memoryStream = new MemoryStream())
         {
-            context.Response.Body = memoryStream; // Redirect response to our memory stream
+            context.Response.Body = memoryStream; 
 
             try
             {
                 context.RequestAborted.ThrowIfCancellationRequested();
-                await _next(context); // Execute the rest of the pipeline
+                await next(context); 
 
                 // Process the response from memoryStream
                 await ProcessResponseAsync(context, memoryStream, originalResponseBodyStream);
@@ -78,7 +66,7 @@ public class ResponseToolFilteringMiddleware
                         ? prefix + modifiedJsonData + suffix
                         : modifiedJsonData;
                     await WriteToStreamAsync(memoryStream, responseBodyAsString, context.RequestAborted);
-                    _logger.LogDebug(
+                    logger.LogDebug(
                         $"Modified Response Body after filtering: {responseBodyAsString.Substring(0, Math.Min(responseBodyAsString.Length, 500))}..."
                     );
                 }
@@ -86,7 +74,7 @@ public class ResponseToolFilteringMiddleware
             }
             else
             {
-                _logger.LogDebug(
+                logger.LogDebug(
                     $"Response content type '{context.Response.ContentType}' not targeted for filtering or body is empty. Skipping filtering."
                 );
             }
@@ -97,7 +85,7 @@ public class ResponseToolFilteringMiddleware
         }
         catch (OperationCanceledException ex)
         {
-            _logger.LogWarning(ex, "Operation canceled during response processing in ResponseToolFilteringMiddleware.");
+            logger.LogWarning(ex, "Operation canceled during response processing in ResponseToolFilteringMiddleware.");
         }
         // JsonException during filtering is caught within TryApplyFilteringAsync
     }
@@ -135,7 +123,7 @@ public class ResponseToolFilteringMiddleware
         string? contentType
     )
     {
-        _logger.LogDebug(
+        logger.LogDebug(
             $"Original Response Body for Filtering ({contentType}): {responseBody.Substring(0, Math.Min(responseBody.Length, 500))}..."
         );
         if (contentType?.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase) == true)
@@ -148,12 +136,12 @@ public class ResponseToolFilteringMiddleware
                 string prefix = responseBody.Substring(0, startIndex);
                 string jsonData = responseBody.Substring(startIndex, endIndex - startIndex + 1);
                 string suffix = responseBody.Substring(endIndex + 1);
-                _logger.LogDebug(
+                logger.LogDebug(
                     $"Attempting to process extracted parts from event-stream. Prefix='{prefix.Substring(0, Math.Min(prefix.Length, 50))}', JSON='{jsonData.Substring(0, Math.Min(jsonData.Length, 100))}', Suffix='{suffix.Substring(0, Math.Min(suffix.Length, 50))}'"
                 );
                 return (prefix, jsonData, suffix, true);
             }
-            _logger.LogDebug(
+            logger.LogDebug(
                 "Event-stream: No JSON object braces found or invalid range. Will attempt to process entire body as JSON."
             );
         }
@@ -171,28 +159,28 @@ public class ResponseToolFilteringMiddleware
             JsonNode? rootNode = JsonNode.Parse(jsonDataForProcessing);
             if (rootNode == null)
             {
-                _logger.LogWarning("Failed to parse JSON data for filtering.");
+                logger.LogWarning("Failed to parse JSON data for filtering.");
                 return null;
             }
 
             JsonArray? toolsArray = rootNode["result"]?["tools"] as JsonArray;
             if (toolsArray == null)
             {
-                _logger.LogDebug("No 'result.tools' array found in JSON, or it's not an array. No filtering applied.");
+                logger.LogDebug("No 'result.tools' array found in JSON, or it's not an array. No filtering applied.");
                 return null; // No tools array to filter
             }
 
-            _logger.LogDebug($"Found 'result.tools' array for filtering. Original tool count: {toolsArray.Count}");
+            logger.LogDebug($"Found 'result.tools' array for filtering. Original tool count: {toolsArray.Count}");
 
             var finalToolsToRemove = new HashSet<string>();
             context.Request.Headers.TryGetValue("X-AGENT-MODE", out var agentModeHeaderValue);
             string? agentMode = agentModeHeaderValue.FirstOrDefault()?.ToUpperInvariant();
-            _logger.LogDebug($"Current X-AGENT-MODE: '{agentMode}'");
+            logger.LogDebug($"Current X-AGENT-MODE: '{agentMode}'");
 
             // If no X-AGENT-MODE header is found, remove all tools
             if (string.IsNullOrEmpty(agentMode))
             {
-                _logger.LogInformation("No X-AGENT-MODE header found. All tools will be removed for security.");
+                logger.LogInformation("No X-AGENT-MODE header found. All tools will be removed for security.");
                 foreach (JsonNode? toolNode_loopvar in toolsArray)
                 {
                     if (toolNode_loopvar is JsonObject toolObject_loopvar)
@@ -214,27 +202,27 @@ public class ResponseToolFilteringMiddleware
                         string? toolName = toolObject_loopvar["name"]?.GetValue<string>();
                         if (!string.IsNullOrEmpty(toolName))
                         {
-                            string[] allowedAudiences = _toolAudienceService.GetAudiencesForTool(toolName);
+                            string[] allowedAudiences = toolAudienceService.GetAudiencesForTool(toolName);
 
                             if (allowedAudiences.Any()) // Tool has specific audience restrictions
                             {
                                 if (!allowedAudiences.Contains(agentMode))
                                 {
-                                    _logger.LogInformation(
+                                    logger.LogInformation(
                                         $"Tool '{toolName}' will be removed. Agent mode '{agentMode}' is not in allowed audiences [{string.Join(", ", allowedAudiences)}]."
                                     );
                                     finalToolsToRemove.Add(toolName);
                                 }
                                 else
                                 {
-                                    _logger.LogDebug(
+                                    logger.LogDebug(
                                         $"Tool '{toolName}' will be kept. Agent mode '{agentMode}' is in allowed audiences [{string.Join(", ", allowedAudiences)}]."
                                     );
                                 }
                             }
                             else
                             {
-                                _logger.LogDebug(
+                                logger.LogDebug(
                                     $"Tool '{toolName}' has no specific audience restrictions defined by McpAudienceAttribute. Kept by default."
                                 );
                             }
@@ -245,7 +233,7 @@ public class ResponseToolFilteringMiddleware
 
             if (!finalToolsToRemove.Any())
             {
-                _logger.LogDebug("No tools marked for removal based on audience or agent mode.");
+                logger.LogDebug("No tools marked for removal based on audience or agent mode.");
                 return null; // No changes needed
             }
 
@@ -263,7 +251,7 @@ public class ResponseToolFilteringMiddleware
                     {
                         toolsArray.RemoveAt(i);
                         changesMade = true;
-                        _logger.LogDebug($"Removed tool '{toolName}' from response based on audience policy.");
+                        logger.LogDebug($"Removed tool '{toolName}' from response based on audience policy.");
                     }
                 }
             }
@@ -271,12 +259,12 @@ public class ResponseToolFilteringMiddleware
             if (changesMade)
             {
                 int newCount = toolsArray.Count;
-                _logger.LogDebug($"Removed {originalCount - newCount} tools from response. New tool count: {newCount}");
+                logger.LogDebug($"Removed {originalCount - newCount} tools from response. New tool count: {newCount}");
                 // Using default JsonSerializerOptions, customize if needed for specific serialization behavior
                 return rootNode.ToJsonString(new JsonSerializerOptions());
             }
 
-            _logger.LogDebug("No tools were actually removed from response based on the specified criteria.");
+            logger.LogDebug("No tools were actually removed from response based on the specified criteria.");
             return null; // No changes made
         }
         catch (JsonException jsonEx)
@@ -285,7 +273,7 @@ public class ResponseToolFilteringMiddleware
                 0,
                 Math.Min(jsonDataForProcessing.Length, 200)
             );
-            _logger.LogWarning(
+            logger.LogWarning(
                 jsonEx,
                 $"Failed to parse or process JSON {(wasPartiallyExtracted ? "extracted JSON part" : "response body")} using JsonNode. Snippet: '{attemptedJsonSnippet}'... Original content will be used."
             );

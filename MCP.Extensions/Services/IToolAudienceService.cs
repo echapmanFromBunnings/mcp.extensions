@@ -1,4 +1,6 @@
-﻿namespace MCP.Extensions.Services;
+﻿using System.Reflection;
+
+namespace MCP.Extensions.Services;
 
 /// <summary>
 /// A service interface for managing tool audiences.
@@ -17,4 +19,10 @@ public interface IToolAudienceService
     /// <param name="toolName">the tool name</param>
     /// <returns></returns>
     string[] GetAudiencesForTool(string toolName);
+    
+    /// <summary>
+    /// Register an additional assembly to scan for tools and audiences.
+    /// </summary>
+    /// <param name="assembly">The assembly to scan</param>
+    void RegisterAssembly(Assembly assembly);
 }

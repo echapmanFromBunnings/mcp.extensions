@@ -21,6 +21,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -33,10 +36,13 @@ jobs:
     - name: Determine Package Version
       id: version
       run: |
+        git fetch --tags --force
+        git fetch --prune --unshallow || true
         # Get latest tag that matches version pattern
-        latest_tag=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        latest_tag=$(git describe --tags --abbrev=0)
 
         if [ -z "$latest_tag" ]; then
+          echo "No previous version found, starting from 0.0.1"
           base_version="0.0.1"
         else
           version="${latest_tag#v}"
