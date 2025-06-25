@@ -61,7 +61,7 @@ public class StreamingToolFilteringMiddleware(
             return false;
         };
 
-        await using var filteringStream = new FilteringWriteStream(
+        using var filteringStream = new FilteringWriteStream(
             originalBody,
             context.Response.ContentType,
             loggerFilteringStream,

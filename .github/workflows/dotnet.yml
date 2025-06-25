@@ -38,14 +38,13 @@ jobs:
       run: |
         git fetch --tags --force
         git fetch --prune --unshallow || true
-        # Get latest tag that matches version pattern
-        latest_tag=$(git describe --tags --abbrev=0)
+        latest_tag=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || true)
 
         if [ -z "$latest_tag" ]; then
           echo "No previous version found, starting from 0.0.1"
           base_version="0.0.1"
         else
-          version="${latest_tag#v}"
+          version="$latest_tag"
           IFS='.' read -r major minor patch <<< "$version"
           patch=$((patch + 1))
           base_version="$major.$minor.$patch"
