@@ -43,6 +43,8 @@ jobs:
         if [ -z "$latest_tag" ]; then
           echo "No previous version found, starting from 0.0.1"
           base_version="0.0.1"
+        elif [[ "${{ github.event_name }}" == "release" ]]; then
+          base_version="$latest_tag"
         else
           version="$latest_tag"
           IFS='.' read -r major minor patch <<< "$version"
