@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <!-- NuGet package properties -->
     <PackageId>MCP.Extensions</PackageId>
-    <Version>0.0.2</Version>
-    <Authors>Eric Chapman</Authors>
+    <Version>0.0.1</Version>
+    <Authors>Eric Chapman</Authors> 
     
     <Product>MCP.Extensions</Product>
     <Description>Extensions and middleware for ModelContextProtocol in ASP.NET Core.</Description>
@@ -29,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.1" />
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.2" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.1" />
   </ItemGroup>
 
