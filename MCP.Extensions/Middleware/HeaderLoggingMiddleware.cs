@@ -14,8 +14,7 @@ public class HeaderLoggingMiddleware(RequestDelegate next, ILogger<HeaderLogging
         "Set-Cookie",
         "X-API-Key",
         "X-Auth-Token",
-        "Proxy-Authorization",
-        "WWW-Authenticate"
+        "Proxy-Authorization"
     };
 
     public async Task InvokeAsync(HttpContext context)
