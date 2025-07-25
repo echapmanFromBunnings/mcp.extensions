@@ -218,21 +218,36 @@ public class ResponseToolFilteringMiddleware(
 
                             if (allowedAudiences.Any()) // Tool has specific audience restrictions
                             {
+                                // Normalize allowed audiences to uppercase for consistent comparison
+                                string[] normalizedAllowedAudiences = allowedAudiences
+                                    .Select(audience => audience.ToUpperInvariant())
+                                    .ToArray();
+                                
+                                logger.LogDebug($"Tool '{toolName}' has audience restrictions: [{string.Join(", ", allowedAudiences)}] (normalized: [{string.Join(", ", normalizedAllowedAudiences)}])");
+                                logger.LogDebug($"Checking against agent modes: [{string.Join(", ", agentModes)}]");
+                                
                                 // Check if ANY of the agent modes match ANY of the allowed audiences
                                 bool hasMatchingAudience = agentModes.Any(agentMode => 
-                                    allowedAudiences.Contains(agentMode, StringComparer.OrdinalIgnoreCase));
+                                    normalizedAllowedAudiences.Contains(agentMode, StringComparer.OrdinalIgnoreCase));
+                                
+                                // Log detailed comparison results
+                                foreach (var agentMode in agentModes)
+                                {
+                                    bool matches = normalizedAllowedAudiences.Contains(agentMode, StringComparer.OrdinalIgnoreCase);
+                                    logger.LogDebug($"Agent mode '{agentMode}' matches normalized allowed audiences: {matches}");
+                                }
                                 
                                 if (!hasMatchingAudience)
                                 {
                                     logger.LogInformation(
-                                        $"Tool '{toolName}' will be removed. None of the agent modes [{string.Join(", ", agentModes)}] are in allowed audiences [{string.Join(", ", allowedAudiences)}]."
+                                        $"Tool '{toolName}' will be removed. None of the agent modes [{string.Join(", ", agentModes)}] are in allowed audiences [{string.Join(", ", normalizedAllowedAudiences)}]."
                                     );
                                     finalToolsToRemove.Add(toolName);
                                 }
                                 else
                                 {
                                     logger.LogDebug(
-                                        $"Tool '{toolName}' will be kept. At least one agent mode from [{string.Join(", ", agentModes)}] is in allowed audiences [{string.Join(", ", allowedAudiences)}]."
+                                        $"Tool '{toolName}' will be kept. At least one agent mode from [{string.Join(", ", agentModes)}] is in allowed audiences [{string.Join(", ", normalizedAllowedAudiences)}]."
                                     );
                                 }
                             }
