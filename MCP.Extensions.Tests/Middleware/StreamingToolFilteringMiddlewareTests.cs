@@ -386,9 +386,58 @@ public class StreamingToolFilteringMiddlewareTests
         responseBody.Position = 0;
         var result = await new StreamReader(responseBody).ReadToEndAsync();
         
-        // Only unrestricted tool should be kept
-        Assert.DoesNotContain("restricted_tool", result);
-        Assert.Contains("unrestricted_tool", result);
+        // Only unrestricted tool should be kept - use precise JSON pattern matching
+        Assert.DoesNotContain("\"name\":\"restricted_tool\"", result);
+        Assert.Contains("\"name\":\"unrestricted_tool\"", result);
+    }
+
+    [Fact]
+    public async Task FilteringWriteStream_NoAgentModes_RemovesRestrictedTools()
+    {
+        // Arrange - Test with no agent modes (empty array)
+        var innerStream = new MemoryStream();
+        var logger = new Mock<ILogger<FilteringWriteStream>>();
+        
+        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("restricted_tool"))
+            .Returns(new[] { "ADMIN" });
+        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("unrestricted_tool"))
+            .Returns(Array.Empty<string>());
+
+        // Create delegate with no agent modes
+        string[] agentModes = Array.Empty<string>();
+        Func<string, bool> shouldRemoveToolDelegate = (toolName) =>
+        {
+            if (string.IsNullOrEmpty(toolName))
+                return false;
+
+            if (!agentModes.Any())
+            {
+                // If no agent modes, remove tools with restrictions but keep unrestricted ones
+                string[] allowedAudiences = _mockToolAudienceService.Object.GetAudiencesForTool(toolName);
+                return allowedAudiences.Any(); // Remove if has restrictions
+            }
+
+            return false;
+        };
+
+        var filteringStream = new FilteringWriteStream(innerStream, "application/json", logger.Object, shouldRemoveToolDelegate);
+
+        var jsonResponse = """
+        {"result":{"tools":[{"name":"restricted_tool","description":"Should be removed"},{"name":"unrestricted_tool","description":"Should be kept"}]}}
+        """;
+
+        // Act
+        var bytes = Encoding.UTF8.GetBytes(jsonResponse);
+        await filteringStream.WriteAsync(bytes, 0, bytes.Length);
+        await filteringStream.FlushAsync();
+
+        // Assert
+        innerStream.Position = 0;
+        var result = await new StreamReader(innerStream).ReadToEndAsync();
+        
+        // Use precise JSON pattern matching to avoid false positives
+        Assert.DoesNotContain("\"name\":\"restricted_tool\"", result);
+        Assert.Contains("\"name\":\"unrestricted_tool\"", result);
     }
 
     [Fact]
