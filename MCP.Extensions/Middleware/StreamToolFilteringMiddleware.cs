@@ -20,7 +20,20 @@ public class StreamingToolFilteringMiddleware(
         var originalBody = context.Response.Body;
 
         context.Request.Headers.TryGetValue("X-AGENT-MODE", out var agentModeHeaderValue);
-        string? agentMode = agentModeHeaderValue.FirstOrDefault()?.ToUpperInvariant();
+        string? agentModeHeader = agentModeHeaderValue.FirstOrDefault();
+        
+        // Parse CSV values from X-AGENT-MODE header
+        string[] agentModes = Array.Empty<string>();
+        if (!string.IsNullOrEmpty(agentModeHeader))
+        {
+            agentModes = agentModeHeader
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(mode => mode.Trim().ToUpperInvariant())
+                .Where(mode => !string.IsNullOrEmpty(mode))
+                .ToArray();
+        }
+        
+        loggerFilteringStream.LogDebug("Parsed X-AGENT-MODE values: [{AgentModes}]", string.Join(", ", agentModes));
 
         Func<string, bool> shouldRemoveToolDelegate = (toolName) =>
         {
@@ -32,31 +45,40 @@ public class StreamingToolFilteringMiddleware(
                 return false;
             }
 
-            if (string.IsNullOrEmpty(agentMode))
+            if (!agentModes.Any())
             {
                 loggerFilteringStream.LogInformation(
-                    "No X-AGENT-MODE header. Tool '{ToolName}' will be removed for security.", toolName
+                    "No X-AGENT-MODE header values. Tool '{ToolName}' will be removed for security.", toolName
                 );
                 return true;
             }
 
             string[] actualAllowedAudiences = toolAudienceService.GetAudiencesForTool(toolName);
             loggerFilteringStream.LogDebug(
-                "Tool '{ToolName}' has audiences: [{Join}], Agent mode: '{AgentMode}'", toolName, string.Join(", ", actualAllowedAudiences), agentMode
+                "Tool '{ToolName}' has audiences: [{Join}], Agent modes: [{AgentModes}]", toolName, string.Join(", ", actualAllowedAudiences), string.Join(", ", agentModes)
             );
 
             if (actualAllowedAudiences.Any())
             {
-                if (!actualAllowedAudiences.Contains(agentMode))
+                // Normalize allowed audiences to uppercase for consistent comparison
+                string[] normalizedAllowedAudiences = actualAllowedAudiences
+                    .Select(audience => audience.ToUpperInvariant())
+                    .ToArray();
+                
+                // Check if ANY of the agent modes match ANY of the allowed audiences
+                bool hasMatchingAudience = agentModes.Any(agentMode => 
+                    normalizedAllowedAudiences.Contains(agentMode, StringComparer.OrdinalIgnoreCase));
+                
+                if (!hasMatchingAudience)
                 {
                     loggerFilteringStream.LogInformation(
-                        "Tool '{ToolName}' will be removed. Agent mode '{AgentMode}' is not in allowed audiences [{Join}].", toolName, agentMode, string.Join(", ", actualAllowedAudiences)
+                        "Tool '{ToolName}' will be removed. None of the agent modes [{AgentModes}] are in allowed audiences [{Join}].", toolName, string.Join(", ", agentModes), string.Join(", ", normalizedAllowedAudiences)
                     );
                     return true;
                 }
             }
             loggerFilteringStream.LogDebug(
-                "Tool '{ToolName}' will be kept. Agent mode '{AgentMode}' is allowed or no audience restrictions for this tool.", toolName, agentMode
+                "Tool '{ToolName}' will be kept. At least one agent mode is allowed or no audience restrictions for this tool.", toolName
             );
             return false;
         };
