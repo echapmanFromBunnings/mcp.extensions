@@ -174,13 +174,25 @@ public class ResponseToolFilteringMiddleware(
 
             var finalToolsToRemove = new HashSet<string>();
             context.Request.Headers.TryGetValue("X-AGENT-MODE", out var agentModeHeaderValue);
-            string? agentMode = agentModeHeaderValue.FirstOrDefault()?.ToUpperInvariant();
-            logger.LogDebug($"Current X-AGENT-MODE: '{agentMode}'");
-
-            // If no X-AGENT-MODE header is found, remove all tools
-            if (string.IsNullOrEmpty(agentMode))
+            string? agentModeHeader = agentModeHeaderValue.FirstOrDefault();
+            
+            // Parse CSV values from X-AGENT-MODE header
+            string[] agentModes = Array.Empty<string>();
+            if (!string.IsNullOrEmpty(agentModeHeader))
             {
-                logger.LogInformation("No X-AGENT-MODE header found. All tools will be removed for security.");
+                agentModes = agentModeHeader
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(mode => mode.Trim().ToUpperInvariant())
+                    .Where(mode => !string.IsNullOrEmpty(mode))
+                    .ToArray();
+            }
+            
+            logger.LogDebug($"Current X-AGENT-MODE values: [{string.Join(", ", agentModes)}]");
+
+            // If no X-AGENT-MODE header is found or no valid values, remove all tools
+            if (!agentModes.Any())
+            {
+                logger.LogInformation("No valid X-AGENT-MODE values found. All tools will be removed for security.");
                 foreach (JsonNode? toolNode_loopvar in toolsArray)
                 {
                     if (toolNode_loopvar is JsonObject toolObject_loopvar)
@@ -206,17 +218,21 @@ public class ResponseToolFilteringMiddleware(
 
                             if (allowedAudiences.Any()) // Tool has specific audience restrictions
                             {
-                                if (!allowedAudiences.Contains(agentMode))
+                                // Check if ANY of the agent modes match ANY of the allowed audiences
+                                bool hasMatchingAudience = agentModes.Any(agentMode => 
+                                    allowedAudiences.Contains(agentMode, StringComparer.OrdinalIgnoreCase));
+                                
+                                if (!hasMatchingAudience)
                                 {
                                     logger.LogInformation(
-                                        $"Tool '{toolName}' will be removed. Agent mode '{agentMode}' is not in allowed audiences [{string.Join(", ", allowedAudiences)}]."
+                                        $"Tool '{toolName}' will be removed. None of the agent modes [{string.Join(", ", agentModes)}] are in allowed audiences [{string.Join(", ", allowedAudiences)}]."
                                     );
                                     finalToolsToRemove.Add(toolName);
                                 }
                                 else
                                 {
                                     logger.LogDebug(
-                                        $"Tool '{toolName}' will be kept. Agent mode '{agentMode}' is in allowed audiences [{string.Join(", ", allowedAudiences)}]."
+                                        $"Tool '{toolName}' will be kept. At least one agent mode from [{string.Join(", ", agentModes)}] is in allowed audiences [{string.Join(", ", allowedAudiences)}]."
                                     );
                                 }
                             }
