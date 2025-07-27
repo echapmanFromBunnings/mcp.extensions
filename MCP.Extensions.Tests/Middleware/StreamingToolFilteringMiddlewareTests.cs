@@ -10,17 +10,17 @@ namespace MCP.Extensions.Tests.Middleware;
 
 public class StreamingToolFilteringMiddlewareTests
 {
-    private readonly Mock<IToolAudienceService> _mockToolAudienceService;
+    private readonly Mock<IAudienceFilterService> _mockAudienceFilterService;
     private readonly Mock<ILogger<FilteringWriteStream>> _mockLogger;
     private readonly Mock<RequestDelegate> _mockNext;
     private readonly StreamingToolFilteringMiddleware _middleware;
 
     public StreamingToolFilteringMiddlewareTests()
     {
-        _mockToolAudienceService = new Mock<IToolAudienceService>();
+        _mockAudienceFilterService = new Mock<IAudienceFilterService>();
         _mockLogger = new Mock<ILogger<FilteringWriteStream>>();
         _mockNext = new Mock<RequestDelegate>();
-        _middleware = new StreamingToolFilteringMiddleware(_mockNext.Object, _mockToolAudienceService.Object, _mockLogger.Object);
+        _middleware = new StreamingToolFilteringMiddleware(_mockNext.Object, _mockAudienceFilterService.Object, _mockLogger.Object);
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class StreamingToolFilteringMiddlewareTests
         var responseBody = new MemoryStream();
         context.Response.Body = responseBody;
 
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool(toolName))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", toolName))
             .Returns(allowedAudiences);
 
         bool actualShouldRemove = false;
@@ -233,7 +233,7 @@ public class StreamingToolFilteringMiddlewareTests
         await _middleware.InvokeAsync(context);
 
         // Assert
-        _mockToolAudienceService.Verify(x => x.GetAudiencesForTool(It.IsAny<string>()), Times.Never);
+        _mockAudienceFilterService.Verify(x => x.GetAudiencesForResource("tool", It.IsAny<string>()), Times.Never);
         // Note: This test is more of an integration test since we can't easily access the delegate directly
     }
 
@@ -245,9 +245,9 @@ public class StreamingToolFilteringMiddlewareTests
         context.Request.Headers["X-AGENT-MODE"] = "PRODUCTS,PRICING";
         
         // Setup tool with lowercase audiences
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("lowercase_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "lowercase_tool"))
             .Returns(new[] { "products", "admin" }); // lowercase
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("mixed_case_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "mixed_case_tool"))
             .Returns(new[] { "Pricing", "Admin" }); // mixed case
 
         var responseBody = new MemoryStream();
@@ -292,9 +292,9 @@ public class StreamingToolFilteringMiddlewareTests
         var innerStream = new MemoryStream();
         var logger = new Mock<ILogger<FilteringWriteStream>>();
         
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("restricted_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "restricted_tool"))
             .Returns(new[] { "ADMIN" });
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("unrestricted_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "unrestricted_tool"))
             .Returns(Array.Empty<string>());
 
         // Create delegate with no agent modes
@@ -307,7 +307,7 @@ public class StreamingToolFilteringMiddlewareTests
             if (!agentModes.Any())
             {
                 // If no agent modes, remove tools with restrictions but keep unrestricted ones
-                string[] allowedAudiences = _mockToolAudienceService.Object.GetAudiencesForTool(toolName);
+                string[] allowedAudiences = _mockAudienceFilterService.Object.GetAudiencesForResource("tool", toolName);
                 return allowedAudiences.Any(); // Remove if has restrictions
             }
 
@@ -342,11 +342,11 @@ public class StreamingToolFilteringMiddlewareTests
         var logger = new Mock<ILogger<FilteringWriteStream>>();
         
         // Setup tool audience service
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("allowed_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "allowed_tool"))
             .Returns(new[] { "PRODUCTS" });
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("restricted_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "restricted_tool"))
             .Returns(new[] { "ADMIN" });
-        _mockToolAudienceService.Setup(x => x.GetAudiencesForTool("unrestricted_tool"))
+        _mockAudienceFilterService.Setup(x => x.GetAudiencesForResource("tool", "unrestricted_tool"))
             .Returns(Array.Empty<string>());
 
         // Create delegate that simulates the middleware logic
@@ -356,7 +356,7 @@ public class StreamingToolFilteringMiddlewareTests
             if (string.IsNullOrEmpty(toolName) || !agentModes.Any())
                 return !agentModes.Any(); // Remove if no agent modes
 
-            string[] allowedAudiences = _mockToolAudienceService.Object.GetAudiencesForTool(toolName);
+            string[] allowedAudiences = _mockAudienceFilterService.Object.GetAudiencesForResource("tool", toolName);
             
             if (allowedAudiences.Any())
             {

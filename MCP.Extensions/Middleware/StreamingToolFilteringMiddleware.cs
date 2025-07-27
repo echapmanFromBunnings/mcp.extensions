@@ -12,7 +12,7 @@ namespace MCP.Extensions.Middleware;
 /// </summary>
 public class StreamingToolFilteringMiddleware(
     RequestDelegate next,
-    IToolAudienceService toolAudienceService,
+    IAudienceFilterService audienceFilterService,
     ILogger<FilteringWriteStream> loggerFilteringStream)
 {
     public async Task InvokeAsync(HttpContext context)
@@ -53,7 +53,7 @@ public class StreamingToolFilteringMiddleware(
                 return true;
             }
 
-            string[] actualAllowedAudiences = toolAudienceService.GetAudiencesForTool(toolName);
+            string[] actualAllowedAudiences = audienceFilterService.GetAudiencesForResource("tool", toolName);
             loggerFilteringStream.LogDebug(
                 "Tool '{ToolName}' has audiences: [{Join}], Agent modes: [{AgentModes}]", toolName, string.Join(", ", actualAllowedAudiences), string.Join(", ", agentModes)
             );
