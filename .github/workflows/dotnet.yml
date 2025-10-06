@@ -48,27 +48,27 @@ jobs:
     - name: Determine Package Version
       id: version
       run: |
-        git fetch --tags --force
-        git fetch --prune --unshallow || true
-        latest_tag=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || true)
-
-        if [ -z "$latest_tag" ]; then
-          echo "No previous version found, starting from 0.0.1"
-          base_version="0.0.1"
-        elif [[ "${{ github.event_name }}" == "release" ]]; then
-          base_version="$latest_tag"
-        else
-          version="$latest_tag"
-          IFS='.' read -r major minor patch <<< "$version"
-          patch=$((patch + 1))
-          base_version="$major.$minor.$patch"
-        fi
-
-        # Add -preview unless it's a release trigger
         if [[ "${{ github.event_name }}" == "release" ]]; then
-          final_version="$base_version"
+          # For releases, use the tag name, stripping any 'v' prefix
+          raw_version="${{ github.ref_name }}"
+          final_version="${raw_version#v}"
         else
-          final_version="$base_version-preview.${{ github.run_id }}"
+          # For non-release builds (e.g., push to main)
+          git fetch --tags --force
+          git fetch --prune --unshallow || true
+          # Updated pattern to find tags with or without 'v' prefix
+          latest_tag=$(git describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*" --match "[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v0.0.0")
+
+          # Strip 'v' prefix for version calculation
+          base_version="${latest_tag#v}"
+
+          # Increment patch version
+          IFS='.' read -r major minor patch <<< "$base_version"
+          patch=$((patch + 1))
+          next_version="$major.$minor.$patch"
+
+          # Append pre-release suffix
+          final_version="$next_version-preview.${{ github.run_id }}"
         fi
 
         echo "PACKAGE_VERSION=$final_version" >> $GITHUB_ENV
