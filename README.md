@@ -1,6 +1,8 @@
 # mcp.extensions
 
-A collection of reusable .NET middleware, attributes, and services to extend and enhance ASP.NET Core applications.
+A collection of reusable .NET middleware, attributes, and services to extend and enhance ASP.NET Core applications working with the Model Context Protocol.
+
+Built against ModelContextProtocol SDK v0.4.0-preview.3.
 
 ## Features
 

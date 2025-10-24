@@ -5,6 +5,8 @@ Extensions and middleware for ModelContextProtocol in ASP.NET Core.
 ## Overview
 This package provides useful middleware and extension methods for working with the [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) in ASP.NET Core applications. It is designed to help with request/response logging, audience filtering, and other common tasks when using ModelContextProtocol.
 
+This package is built against ModelContextProtocol SDK v0.4.0-preview.3.
+
 ## Features
 - Middleware for logging HTTP headers, request bodies, and response bodies
 - Middleware for filtering tools in responses and streams
@@ -44,8 +46,8 @@ public IActionResult AdminOnlyAction() {
 
 ## Requirements
 - .NET 9.0 or later
-- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol)
-- [ModelContextProtocol.AspNetCore](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore)
+- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) v0.4.0-preview.3
+- [ModelContextProtocol.AspNetCore](https://www.nuget.org/packages/ModelContextProtocol.AspNetCore) v0.4.0-preview.3
 
 ## License
 MIT
